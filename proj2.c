@@ -7,25 +7,32 @@
  */
 
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <semaphore.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "proj2.h"
 
+int shm_fd = 0;  //!< fd sdilene pameti
+struct Shared_data* data = NULL;  //!< sdilena data
 struct Params par;  //!< parametry z prikazove radky
 
 int main(int argc, char* argv[]){
 
-//    sem_unlink("/proj2_sem_judge");
-//    sem_unlink("/proj2_sem_check");
-//    sem_unlink("/proj2_sem_confirm");
-//    shm_unlink("/proj2_shared_mem");
+    printf("MAIN process => PID=%d\n", getpid());
+
+    sem_unlink("/proj2_sem_judge");
+    sem_unlink("/proj2_sem_check");
+    sem_unlink("/proj2_sem_confirm");
+    sem_unlink("/proj2_sem_print_row");
+    shm_unlink("/proj2_shared_mem");
 
     // zpracovani argumentu
     if(arg_process(argc,argv) == ERR){
@@ -33,15 +40,12 @@ int main(int argc, char* argv[]){
         return ERR;
     };
 
-    int shm_fd = 0;
-    struct Shared_data* data = NULL;
+    // nastaveni sdilene pameti
+    if((set_sh_mem(&shm_fd,&data)) == ERR)
+        return ERR;
 
     // nastaveni semaforu
     if(set_semaphores() == ERR)
-        return ERR;
-
-    // nastaveni sdilene pameti
-    if((set_sh_mem(&shm_fd,&data)) == ERR)
         return ERR;
 
     // inicializace sdilene pameti
@@ -49,23 +53,26 @@ int main(int argc, char* argv[]){
         return ERR;
 
     // vytvoreni novych procesu
-    int pid=fork();  //!< novy proces
-    if(pid == 0){  // child
+    pid_t pid=fork();
+    if(pid == 0){  // child; pomocny proces pro generovani imigrantu
 
         generate_immigrants();
+        exit(SUCC);
 
     }else if(pid == -1){
         fprintf(stderr,"Nastala chyba pri vytvareni procesu\n");
         clean_sh_mem(data, shm_fd);
         return ERR;
-    }else{  // parent
+    }else{  // parent; proces pro soudce
 
-        process_judge(data);
+        generate_judge();
 
     }
 
+    wait(NULL);  // cekani na dokonceni vsech vytvorenych procesu
+
     fclose(data->out);  // zavreni souboru pro vypis
-    clean_semaphores();  // zruseni semaforu
+    clean_semaphores();  // zruseni vsech semaforu
     clean_sh_mem(data,shm_fd);  // zruseni sdilene pameti
 
     return SUCC;
@@ -90,7 +97,7 @@ int arg_process(int c, char* v[]){
             if(val < 0 || val > 2000)
                 return ERR;
 
-            switch(val){
+            switch(i){
                 case 2: par.IG = val; break;
                 case 3: par.JG = val; break;
                 case 4: par.IT = val; break;
@@ -101,6 +108,19 @@ int arg_process(int c, char* v[]){
     }
 
     return SUCC;
+}
+
+void print_to_file(FILE* f, char * str, ...){
+
+    sem_wait(data->print_row);
+
+    va_list args;
+    va_start(args, str);
+    vfprintf(f, str, args);
+    va_end(args);
+
+    sem_post(data->print_row);
+
 }
 
 int set_sh_mem(int* shm_fd, struct Shared_data** data){
@@ -143,6 +163,7 @@ int init_sh_data(struct Shared_data* data, int shm_fd){
         fprintf(stderr, "Nepodarilo se otevrit soubor\n");
         return ERR;
     }
+    setbuf(data->out,NULL);
 
     data->cnt = data->NE = data->NC = data->NB = 0;
 
@@ -152,21 +173,31 @@ int init_sh_data(struct Shared_data* data, int shm_fd){
 
 int set_semaphores(){
 
-    if((judge = sem_open("/proj2_sem_judge", O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED){
+    if((data->judge = sem_open("/proj2_sem_judge", O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED){
         return ERR;
     }
 
-    if((check = sem_open("/proj2_sem_check", O_CREAT | O_EXCL, 0666, 0)) == SEM_FAILED){
-        sem_close(judge);
+    if((data->check = sem_open("/proj2_sem_check", O_CREAT | O_EXCL, 0666, 0)) == SEM_FAILED){
+        sem_close(data->judge);
         sem_unlink("/proj2_sem_judge");
         return ERR;
     }
 
-    if((confirm = sem_open("/proj2_sem_confirm", O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED){
-        sem_close(judge);
+    if((data->confirm = sem_open("/proj2_sem_confirm", O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED){
+        sem_close(data->judge);
+        sem_close(data->check);
         sem_unlink("/proj2_sem_judge");
-        sem_close(check);
         sem_unlink("/proj2_sem_check");
+        return ERR;
+    }
+
+    if((data->print_row = sem_open("/proj2_sem_print_row", O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED){
+        sem_close(data->judge);
+        sem_close(data->check);
+        sem_close(data->confirm);
+        sem_unlink("/proj2_sem_judge");
+        sem_unlink("/proj2_sem_check");
+        sem_unlink("/proj2_sem_confirm");
         return ERR;
     }
 
@@ -175,69 +206,132 @@ int set_semaphores(){
 
 void clean_semaphores(){
 
-    sem_close(judge);
+    sem_close(data->judge);
+    sem_close(data->check);
+    sem_close(data->confirm);
+    sem_close(data->print_row);
+
     sem_unlink("/proj2_sem_judge");
-    sem_close(check);
     sem_unlink("/proj2_sem_check");
-    sem_close(confirm);
     sem_unlink("/proj2_sem_confirm");
+    sem_unlink("/proj2_sem_print_row");
 
 }
 
-int process_judge(struct Shared_data* data){
+void process_judge(){
+
+    printf("JUDGE process => PPID=%d, PID=%d\n", getppid(), getpid());
 
     do{
-
         usleep(generate_random(par.JG));
-        fprintf(data->out, "%d: JUDGE: enters: %d: %d: %d\n", data->cnt, data->NE, data->NC, data->NB);
+        print_to_file(data->out, "%d: JUDGE: wants to enter\n", ++data->cnt);
+
+        sem_wait(data->judge);
+
+        print_to_file(data->out, "%d: JUDGE: enters: %d: %d: %d\n", ++data->cnt, data->NE, data->NC, data->NB);
 
         if(data->NE != data->NC){
-            fprintf(data->out, "%d: JUDGE: waits for imm: %d: %d: %d\n", data->cnt, data->NE, data->NC, data->NB);
+            printf("NE: %d, NC: %d\n",data->NE,data->NC);
+            print_to_file(data->out, "%d: JUDGE: waits for imm: %d: %d: %d\n", ++data->cnt, data->NE, data->NC, data->NB);
+            sem_post(data->check);
+
         }else{
-            fprintf(data->out, "%d: JUDGE: starts onfirmation: %d: %d: %d\n", data->cnt, data->NE, data->NC, data->NB);
-            usleep(generate_random(par.JT));
-            fprintf(data->out, "%d: JUDGE: ends onfirmation: %d: %d: %d\n", data->cnt, data->NE, data->NC, data->NB);
+//            fprintf(data->out, "%d: JUDGE: starts confirmation: %d: %d: %d\n", data->cnt, data->NE, data->NC, data->NB);
+//            usleep(generate_random(par.JT));
+//            fprintf(data->out, "%d: JUDGE: ends onfirmation: %d: %d: %d\n", data->cnt, data->NE--, data->NC--, data->NB);
+//            sem_post(data->confirm);
         }
 
         usleep(generate_random(par.JT));
-        fprintf(data->out, "%d: JUDGE: leaves: %d: %d: %d\n", data->cnt, data->NE, data->NC, data->NB);
+        print_to_file(data->out, "%d: JUDGE: leaves: %d: %d: %d\n", ++data->cnt, data->NE, data->NC, data->NB);
 
-    }while(data->NE != data->NC);
+        sem_post(data->judge);
 
-    fprintf(data->out, "%d: JUDGE: finishes\n", data->cnt);
+    }while(par.PI != data->NC);
 
-    return SUCC;
+    print_to_file(data->out, "%d: JUDGE: finishes\n", ++data->cnt);
+
+    sem_post(data->check);
+    sem_post(data->judge);
+
 }
 
-int process_immigrant(struct Shared_data* data, int proc_num){
+void process_immigrant(int proc_num){
 
-    fprintf(data->out, "%d: IMM %d: starts\n", data->cnt, proc_num);
+    printf("%d: IMMIGRANT process => PPID=%d, PID=%d\n", proc_num, getppid(), getpid());
+
+    print_to_file(data->out, "%d: IMM %d: starts\n", ++data->cnt, proc_num);
 
     // pokousi se dostat do budovy
     // pokud je soudce v budove, ceka az odejde
-    fprintf(data->out, "%d: IMM %d: enters: %d: %d: %d\n", data->cnt, proc_num, data->NE, data->NC, data->NB);
+    sem_wait(data->judge);
+    data->NE++;
+    data->NB++;
+
+    print_to_file(data->out, "%d: IMM %d: enters: %d: %d: %d\n", ++data->cnt, proc_num, data->NE, data->NC, data->NB);
+
+    sem_post(data->judge);
 
     // registrace
     // kazdy proces imigrant se registruje samostatne, poradi odpovida vstupu
-    fprintf(data->out, "%d: IMM %d: checks: %d: %d: %d\n", data->cnt, proc_num, data->NE, data->NC, data->NB);
+    sem_wait(data->check);
+    data->NC++;
 
-    // proces ceka na vydani rozhodnuti soudce
-    // po vydani rozhodnuti si vyzvedava certifikat
-    fprintf(data->out, "%d: IMM %d: wants certificate: %d: %d: %d\n", data->cnt, proc_num, data->NE, data->NC, data->NB);
-    usleep(generate_random(par.IT));
-    fprintf(data->out, "%d: IMM %d: got certificate: %d: %d: %d\n", data->cnt, proc_num, data->NE, data->NC, data->NB);
+    print_to_file(data->out, "%d: IMM %d: checks: %d: %d: %d\n", ++data->cnt, proc_num, data->NE, data->NC, data->NB);
+
+    sem_post(data->check);
+
+//    sem_wait(data->confirm);
+//    // proces ceka na vydani rozhodnuti soudce
+//    // po vydani rozhodnuti si vyzvedava certifikat
+//    fprintf(data->out, "%d: IMM %d: wants certificate: %d: %d: %d\n", data->cnt, proc_num, data->NE, data->NC, data->NB);
+//    usleep(generate_random(par.IT));
+//    fprintf(data->out, "%d: IMM %d: got certificate: %d: %d: %d\n", data->cnt, proc_num, data->NE, data->NC, data->NB);
 
     // odchod z budouvy
     // pokud je soudce v budove ceka na jeho odchod
     // pokud neni v budouve tiskne:
-    fprintf(data->out, "%d: IMM %d: leaves: %d: %d: %d\n", data->cnt, proc_num, data->NE, data->NC, data->NB);
+    sem_wait(data->judge);
+    print_to_file(data->out, "%d: IMM %d: leaves: %d: %d: %d\n", ++data->cnt, proc_num, data->NE, data->NC, data->NB);
+    sem_post(data->judge);
 
-
-    exit(SUCC);
 }
 
-int generate_immigrants(){
-    exit(SUCC);
+void generate_judge(){
+
+    pid_t pid = fork();
+    if(pid == 0) {
+
+        process_judge();
+        exit(SUCC);
+    }
+    else if(pid > 0) {
+        wait(NULL);
+    }
+    else {
+        printf("Unable to create child process.\n");
+    }
+
+}
+
+void generate_immigrants(){
+
+    printf("GENERATOR IMMIGRANT process => PPID=%d, PID=%d\n", getppid(), getpid());
+
+    for(int i = 1; i <= par.PI; i++) {
+
+        usleep(generate_random(par.IG));
+
+        pid_t pid = fork();
+        if(pid == 0) {
+            process_immigrant(i);
+            exit(0);
+        }
+        else if(pid > 0)  {
+            wait(NULL);
+        }
+    }
+
 }
 
 int generate_random(int max){

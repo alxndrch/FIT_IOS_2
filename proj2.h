@@ -32,12 +32,11 @@ struct Shared_data{
     int NE;  //!< aktualni pocet imigrantu, kteri vstoupily do budouvy; nebylo rozhodnuto
     int NC;  //!< aktualni pocet imigrantu, kteri se zaregistrovali; nebylo rozhodnuto
     int NB;  //!< aktualni pocet imigrantu, kteri jsou v budouve
+    sem_t *judge;
+    sem_t *check;
+    sem_t *confirm;
+    sem_t *print_row;
 };
-
-sem_t *judge;
-sem_t *check;
-sem_t *confirm;
-
 
 /**
  * @brief zpracovani argumentu pri spusteni programu
@@ -47,6 +46,16 @@ sem_t *confirm;
  * @return SUCC pri uspechu, jinak ERR
  */
 int arg_process(int c, char* v[]);
+
+ /**
+  * @brief vypis do souboru
+  * s nastavanim semaforu
+  *
+  * @param f vystupni soubor
+  * @param str retezec
+  * @param ... parametry
+  */
+void print_to_file(FILE* f, char * str, ...);
 
 /**
  * @brief nastaveni sdilene pameti
@@ -91,7 +100,7 @@ void clean_semaphores();
  * @param data sdilena data
  * @return SUCC pri uspesnem behu jinak ERR
  */
-int process_judge(struct Shared_data* data);
+void process_judge();
 
 /**
  * @brief proces soudce
@@ -100,14 +109,17 @@ int process_judge(struct Shared_data* data);
  * @param proc_num cislo procesu
  * @return SUCC pri uspesnem behu jinak ERR
  */
-int process_immigrant(struct Shared_data* data, int proc_num);
+void process_immigrant(int proc_num);
 
 /**
  * @brief generovani imigrantu
- *
- * @return
  */
-int generate_immigrants();
+void generate_immigrants();
+
+/**
+ * @brief vytvoreni procesu soudce
+ */
+void generate_judge();
 
 /**
  * @brief generovani nahodnych cisel
