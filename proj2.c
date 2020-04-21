@@ -26,8 +26,6 @@ struct Params par;  //!< parametry z prikazove radky
 
 int main(int argc, char* argv[]){
 
-    printf("MAIN process => PID=%d\n", getpid());
-
     sem_unlink("/proj2_sem_judge");
     sem_unlink("/proj2_sem_check");
     sem_unlink("/proj2_sem_confirm");
@@ -56,7 +54,7 @@ int main(int argc, char* argv[]){
     pid_t pid=fork();
     if(pid == 0){  // child; pomocny proces pro generovani imigrantu
 
-        generate_immigrants();
+        generate_judge();
         exit(SUCC);
 
     }else if(pid == -1){
@@ -65,7 +63,7 @@ int main(int argc, char* argv[]){
         return ERR;
     }else{  // parent; proces pro soudce
 
-        generate_judge();
+        generate_immigrants();
 
     }
 
@@ -165,7 +163,7 @@ int init_sh_data(struct Shared_data* data, int shm_fd){
     }
     setbuf(data->out,NULL);
 
-    data->cnt = data->NE = data->NC = data->NB = 0;
+    data->cnt = data->NE = data->NC = data->NB = data->done_imm = 0;
 
     return SUCC;
 
@@ -177,13 +175,13 @@ int set_semaphores(){
         return ERR;
     }
 
-    if((data->check = sem_open("/proj2_sem_check", O_CREAT | O_EXCL, 0666, 0)) == SEM_FAILED){
+    if((data->check = sem_open("/proj2_sem_check", O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED){
         sem_close(data->judge);
         sem_unlink("/proj2_sem_judge");
         return ERR;
     }
 
-    if((data->confirm = sem_open("/proj2_sem_confirm", O_CREAT | O_EXCL, 0666, 1)) == SEM_FAILED){
+    if((data->confirm = sem_open("/proj2_sem_confirm", O_CREAT | O_EXCL, 0666, 0)) == SEM_FAILED){
         sem_close(data->judge);
         sem_close(data->check);
         sem_unlink("/proj2_sem_judge");
@@ -220,39 +218,57 @@ void clean_semaphores(){
 
 void process_judge(){
 
-    printf("JUDGE process => PPID=%d, PID=%d\n", getppid(), getpid());
+    int NC_temp = 0;  //!< pomocna promena pro otevreni semaforu confirm
 
-    do{
+   do{
         usleep(generate_random(par.JG));
-        print_to_file(data->out, "%d: JUDGE: wants to enter\n", ++data->cnt);
+
+        sem_wait(data->print_row);
+        fprintf(data->out, "%d: JUDGE: wants to enter\n", ++data->cnt);
+        sem_post(data->print_row);
 
         sem_wait(data->judge);
 
-        print_to_file(data->out, "%d: JUDGE: enters: %d: %d: %d\n", ++data->cnt, data->NE, data->NC, data->NB);
+        sem_wait(data->print_row);
+        fprintf(data->out, "%d: JUDGE: enters: %d: %d: %d\n", ++data->cnt, data->NE, data->NC, data->NB);
+        sem_post(data->print_row);
 
         if(data->NE != data->NC){
-            printf("NE: %d, NC: %d\n",data->NE,data->NC);
-            print_to_file(data->out, "%d: JUDGE: waits for imm: %d: %d: %d\n", ++data->cnt, data->NE, data->NC, data->NB);
-            sem_post(data->check);
+
+            sem_wait(data->print_row);
+            fprintf(data->out, "%d: JUDGE: waits for imm: %d: %d: %d\n", ++data->cnt, data->NE, data->NC, data->NB);
+            sem_post(data->print_row);
 
         }else{
-//            fprintf(data->out, "%d: JUDGE: starts confirmation: %d: %d: %d\n", data->cnt, data->NE, data->NC, data->NB);
-//            usleep(generate_random(par.JT));
-//            fprintf(data->out, "%d: JUDGE: ends onfirmation: %d: %d: %d\n", data->cnt, data->NE--, data->NC--, data->NB);
-//            sem_post(data->confirm);
+            sem_wait(data->print_row);
+            fprintf(data->out, "%d: JUDGE: starts confirmation: %d: %d: %d\n", ++data->cnt, data->NE, data->NC, data->NB);
+            sem_post(data->print_row);
+
+            usleep(generate_random(par.JT));
+
+            sem_wait(data->print_row);
+            NC_temp = data->NC;
+            fprintf(data->out, "%d: JUDGE: ends onfirmation: %d: %d: %d\n", ++data->cnt, data->NE=0, data->NC=0, data->NB);
+            sem_post(data->print_row);
+
+            for(int i = 0; i < NC_temp; i++){
+                sem_post(data->confirm);
+            }
         }
 
         usleep(generate_random(par.JT));
-        print_to_file(data->out, "%d: JUDGE: leaves: %d: %d: %d\n", ++data->cnt, data->NE, data->NC, data->NB);
+
+        sem_wait(data->print_row);
+        fprintf(data->out, "%d: JUDGE: leaves: %d: %d: %d\n", ++data->cnt, data->NE, data->NC, data->NB);
+        sem_post(data->print_row);
 
         sem_post(data->judge);
 
-    }while(par.PI != data->NC);
+    }while(par.PI != data->done_imm);
 
-    print_to_file(data->out, "%d: JUDGE: finishes\n", ++data->cnt);
-
-    sem_post(data->check);
-    sem_post(data->judge);
+    sem_wait(data->print_row);
+    fprintf(data->out, "%d: JUDGE: finishes\n", ++data->cnt);
+    sem_post(data->print_row);
 
 }
 
@@ -260,39 +276,53 @@ void process_immigrant(int proc_num){
 
     printf("%d: IMMIGRANT process => PPID=%d, PID=%d\n", proc_num, getppid(), getpid());
 
-    print_to_file(data->out, "%d: IMM %d: starts\n", ++data->cnt, proc_num);
+    sem_wait(data->print_row);
+    fprintf(data->out, "%d: IMM %d: starts\n", ++data->cnt, proc_num);
+    sem_post(data->print_row);
 
     // pokousi se dostat do budovy
     // pokud je soudce v budove, ceka az odejde
     sem_wait(data->judge);
-    data->NE++;
-    data->NB++;
 
-    print_to_file(data->out, "%d: IMM %d: enters: %d: %d: %d\n", ++data->cnt, proc_num, data->NE, data->NC, data->NB);
+    sem_wait(data->print_row);
+    fprintf(data->out, "%d: IMM %d: enters: %d: %d: %d\n", ++data->cnt, proc_num, ++data->NE, data->NC, ++data->NB);
+    sem_post(data->print_row);
 
     sem_post(data->judge);
 
     // registrace
     // kazdy proces imigrant se registruje samostatne, poradi odpovida vstupu
     sem_wait(data->check);
-    data->NC++;
 
-    print_to_file(data->out, "%d: IMM %d: checks: %d: %d: %d\n", ++data->cnt, proc_num, data->NE, data->NC, data->NB);
+    sem_wait(data->print_row);
+    fprintf(data->out, "%d: IMM %d: checks: %d: %d: %d\n", ++data->cnt, proc_num, data->NE, ++data->NC, data->NB);
+    sem_post(data->print_row);
 
     sem_post(data->check);
 
-//    sem_wait(data->confirm);
-//    // proces ceka na vydani rozhodnuti soudce
-//    // po vydani rozhodnuti si vyzvedava certifikat
-//    fprintf(data->out, "%d: IMM %d: wants certificate: %d: %d: %d\n", data->cnt, proc_num, data->NE, data->NC, data->NB);
-//    usleep(generate_random(par.IT));
-//    fprintf(data->out, "%d: IMM %d: got certificate: %d: %d: %d\n", data->cnt, proc_num, data->NE, data->NC, data->NB);
+    // proces ceka na vydani rozhodnuti soudce
+    // po vydani rozhodnuti si vyzvedava certifikat
+    sem_wait(data->confirm);
+
+    sem_wait(data->print_row);
+    data->done_imm++;
+    fprintf(data->out, "%d: IMM %d: wants certificate: %d: %d: %d\n", ++data->cnt, proc_num, data->NE, data->NC, data->NB);
+    sem_post(data->print_row);
+
+    usleep(generate_random(par.IT));
+    sem_wait(data->print_row);
+    fprintf(data->out, "%d: IMM %d: got certificate: %d: %d: %d\n", ++data->cnt, proc_num, data->NE, data->NC, data->NB);
+    sem_post(data->print_row);
 
     // odchod z budouvy
     // pokud je soudce v budove ceka na jeho odchod
     // pokud neni v budouve tiskne:
     sem_wait(data->judge);
-    print_to_file(data->out, "%d: IMM %d: leaves: %d: %d: %d\n", ++data->cnt, proc_num, data->NE, data->NC, data->NB);
+
+    sem_wait(data->print_row);
+    fprintf(data->out, "%d: IMM %d: leaves: %d: %d: %d\n", ++data->cnt, proc_num, data->NE, data->NC, --data->NB);
+    sem_post(data->print_row);
+
     sem_post(data->judge);
 
 }
@@ -316,8 +346,6 @@ void generate_judge(){
 
 void generate_immigrants(){
 
-    printf("GENERATOR IMMIGRANT process => PPID=%d, PID=%d\n", getppid(), getpid());
-
     for(int i = 1; i <= par.PI; i++) {
 
         usleep(generate_random(par.IG));
@@ -325,11 +353,10 @@ void generate_immigrants(){
         pid_t pid = fork();
         if(pid == 0) {
             process_immigrant(i);
+
             exit(0);
         }
-        else if(pid > 0)  {
-            wait(NULL);
-        }
+
     }
 
 }

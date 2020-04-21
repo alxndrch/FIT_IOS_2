@@ -32,10 +32,11 @@ struct Shared_data{
     int NE;  //!< aktualni pocet imigrantu, kteri vstoupily do budouvy; nebylo rozhodnuto
     int NC;  //!< aktualni pocet imigrantu, kteri se zaregistrovali; nebylo rozhodnuto
     int NB;  //!< aktualni pocet imigrantu, kteri jsou v budouve
-    sem_t *judge;
-    sem_t *check;
-    sem_t *confirm;
-    sem_t *print_row;
+    int done_imm;  //!< pocet dokoncenych zadasti
+    sem_t *judge;  //!< rizeni vstupu do budovy
+    sem_t *check;  //!< rizeni registrace
+    sem_t *confirm;  //!< rizeni potvrzovani
+    sem_t *print_row;  //!< rizeni pristupu k souboru
 };
 
 /**
