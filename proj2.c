@@ -28,14 +28,6 @@ int main(int argc, char* argv[]){
 
     srand(time(0));
 
-    sem_unlink("/proj2_sem_judge");
-    sem_unlink("/proj2_sem_check");
-    sem_unlink("/proj2_sem_confirm");
-    sem_unlink("/proj2_sem_print_row");
-    shm_unlink("/proj2_shared_mem");
-
-    printf("MAIN process => PPID=%d, PID=%d\n", getppid(), getpid());
-
     // zpracovani argumentu
     if(arg_process(argc,argv) == ERR){
         fprintf(stderr, "Chybne zadane argumenty\n");
@@ -76,7 +68,6 @@ int main(int argc, char* argv[]){
     }
 
     wait(NULL);
-    printf("EXIT_MAIN\n");
     clean_all(data, shm_fd);
 
     return EXIT_SUCCESS;
@@ -219,8 +210,6 @@ void clean_semaphores(){
 
 void process_judge(){
 
-    printf("JUDGE process => PPID=%d, PID=%d\n", getppid(), getpid());
-
     int NC_temp = 0;  //!< pomocna promena pro otevreni semaforu confirm
 
    do{
@@ -278,8 +267,6 @@ void process_judge(){
 
 void process_immigrant(int proc_num){
 
-    printf("%d: IMMIGRANT process => PPID=%d, PID=%d\n", proc_num, getppid(), getpid());
-
     sem_wait(data->print_row);
     fprintf(data->out, "%d: IMM %d: starts\n", ++data->cnt, proc_num);
     sem_post(data->print_row);
@@ -333,13 +320,10 @@ void process_immigrant(int proc_num){
 
 void generate_judge(){
 
-    printf("GEN JUDGE process => PPID=%d, PID=%d\n", getppid(), getpid());
-
     pid_t pid = fork();
     if(pid == 0) {
 
         process_judge();
-        printf("EXIT_JUDGE\n");
         exit(SUCC);
 
     }else if(pid == -1){
@@ -356,8 +340,6 @@ void generate_immigrants(){
 
     pid_t wpid;
 
-    printf("GEN IMMIGRANT process => PPID=%d, PID=%d\n", getppid(), getpid());
-
     for(int i = 1; i <= par.PI; i++){
 
         usleep(generate_random(par.IG));
@@ -365,7 +347,6 @@ void generate_immigrants(){
         pid_t pid = fork();
         if(pid == 0) {
             process_immigrant(i);
-            printf("EXIT_IMM %d\n",i);
             exit(EXIT_SUCCESS);
         }else if(pid == -1){
             fprintf(stderr,"Nastala chyba pri vytvareni procesu\n");
@@ -375,10 +356,8 @@ void generate_immigrants(){
     }
 
     while ((wpid = wait(NULL)) > 0);
-    printf("EXIT_IMM_GEN\n");
 }
 
 int generate_random(int max){
-
     return (rand() % (max + 1)) * 1000;  // prevod na mikrosekundy
 }

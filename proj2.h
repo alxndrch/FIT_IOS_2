@@ -62,7 +62,7 @@ void print_to_file(FILE* f, char * str, ...);
  * @brief nastaveni sdilene pameti
  *
  * @param shm_fd pipisovac sdilene pameti
- * @param data
+ * @param data sdilena data
  * @return SUCC pokud nenastane chyba, jinak ERR
  */
 int set_sh_mem(int* shm_fd, struct Shared_data** data);
@@ -70,16 +70,16 @@ int set_sh_mem(int* shm_fd, struct Shared_data** data);
 /**
  * @brief uvolneni zdroju pro sdilenou pamet
  *
- * @param data
- * @param shm_fd
+ * @param data sdilena data
+ * @param shm_fd pipisovac sdilene pameti
  */
 void clean_sh_mem(struct Shared_data* data, int shm_fd);
 
 /**
  * @brief uvolneni vsech zdroju
  *
- * @param data
- * @param shm_fd
+ * @param data sdilena data
+ * @param shm_fd pipisovac sdilene pameti
  */
 void clean_all(struct Shared_data* data, int shm_fd);
 
