@@ -26,54 +26,60 @@ struct Params par;  //!< parametry z prikazove radky
 
 int main(int argc, char* argv[]){
 
+    srand(time(0));
+
     sem_unlink("/proj2_sem_judge");
     sem_unlink("/proj2_sem_check");
     sem_unlink("/proj2_sem_confirm");
     sem_unlink("/proj2_sem_print_row");
     shm_unlink("/proj2_shared_mem");
 
+    printf("MAIN process => PPID=%d, PID=%d\n", getppid(), getpid());
+
     // zpracovani argumentu
     if(arg_process(argc,argv) == ERR){
         fprintf(stderr, "Chybne zadane argumenty\n");
-        return ERR;
+        return EXIT_FAILURE;
     };
 
     // nastaveni sdilene pameti
-    if((set_sh_mem(&shm_fd,&data)) == ERR)
-        return ERR;
+    if((set_sh_mem(&shm_fd,&data)) == ERR){
+        fprintf(stderr,"Nepodarilo se alokovat zdroje\n");
+        return EXIT_FAILURE;
+    }
 
     // nastaveni semaforu
-    if(set_semaphores() == ERR)
-        return ERR;
+    if(set_semaphores() == ERR){
+        fprintf(stderr,"Nepodarilo se alokovat zdroje\n");
+        return EXIT_FAILURE;
+    }
 
     // inicializace sdilene pameti
-    if((init_sh_data(data, shm_fd)) == ERR )
-        return ERR;
+    if((init_sh_data(data, shm_fd)) == ERR)
+        return EXIT_FAILURE;
 
     // vytvoreni novych procesu
     pid_t pid=fork();
     if(pid == 0){  // child; pomocny proces pro generovani imigrantu
 
-        generate_judge();
+        generate_immigrants();
         exit(SUCC);
 
     }else if(pid == -1){
         fprintf(stderr,"Nastala chyba pri vytvareni procesu\n");
-        clean_sh_mem(data, shm_fd);
-        return ERR;
+        clean_all(data, shm_fd);
+        return EXIT_FAILURE;
     }else{  // parent; proces pro soudce
 
-        generate_immigrants();
+        generate_judge();
 
     }
 
-    wait(NULL);  // cekani na dokonceni vsech vytvorenych procesu
+    wait(NULL);
+    printf("EXIT_MAIN\n");
+    clean_all(data, shm_fd);
 
-    fclose(data->out);  // zavreni souboru pro vypis
-    clean_semaphores();  // zruseni vsech semaforu
-    clean_sh_mem(data,shm_fd);  // zruseni sdilene pameti
-
-    return SUCC;
+    return EXIT_SUCCESS;
 }
 
 int arg_process(int c, char* v[]){
@@ -108,19 +114,6 @@ int arg_process(int c, char* v[]){
     return SUCC;
 }
 
-void print_to_file(FILE* f, char * str, ...){
-
-    sem_wait(data->print_row);
-
-    va_list args;
-    va_start(args, str);
-    vfprintf(f, str, args);
-    va_end(args);
-
-    sem_post(data->print_row);
-
-}
-
 int set_sh_mem(int* shm_fd, struct Shared_data** data){
 
     if((*shm_fd = shm_open("/proj2_shared_mem", O_CREAT | O_RDWR | O_EXCL, 0666)) == -1){
@@ -150,6 +143,14 @@ void clean_sh_mem(struct Shared_data* data, int shm_fd){
     munmap(data,sizeof(struct Shared_data));
     shm_unlink("/proj2_shared_mem");
     close(shm_fd);  // zavreni fd alokovaneho v shm_open
+
+}
+
+void clean_all(struct Shared_data* data, int shm_fd){
+
+    fclose(data->out);  // zavreni souboru pro vypis
+    clean_semaphores();  // zruseni vsech semaforu
+    clean_sh_mem(data,shm_fd);  // zruseni sdilene pameti
 
 }
 
@@ -218,6 +219,8 @@ void clean_semaphores(){
 
 void process_judge(){
 
+    printf("JUDGE process => PPID=%d, PID=%d\n", getppid(), getpid());
+
     int NC_temp = 0;  //!< pomocna promena pro otevreni semaforu confirm
 
    do{
@@ -248,12 +251,13 @@ void process_judge(){
 
             sem_wait(data->print_row);
             NC_temp = data->NC;
-            fprintf(data->out, "%d: JUDGE: ends onfirmation: %d: %d: %d\n", ++data->cnt, data->NE=0, data->NC=0, data->NB);
+            fprintf(data->out, "%d: JUDGE: ends confirmation: %d: %d: %d\n", ++data->cnt, data->NE=0, data->NC=0, data->NB);
             sem_post(data->print_row);
 
             for(int i = 0; i < NC_temp; i++){
                 sem_post(data->confirm);
             }
+
         }
 
         usleep(generate_random(par.JT));
@@ -329,39 +333,52 @@ void process_immigrant(int proc_num){
 
 void generate_judge(){
 
+    printf("GEN JUDGE process => PPID=%d, PID=%d\n", getppid(), getpid());
+
     pid_t pid = fork();
     if(pid == 0) {
 
         process_judge();
+        printf("EXIT_JUDGE\n");
         exit(SUCC);
-    }
-    else if(pid > 0) {
+
+    }else if(pid == -1){
+        fprintf(stderr,"Nastala chyba pri vytvareni procesu\n");
+        clean_all(data, shm_fd);
+        exit(EXIT_FAILURE);
+    }else{
         wait(NULL);
-    }
-    else {
-        printf("Unable to create child process.\n");
     }
 
 }
 
 void generate_immigrants(){
 
-    for(int i = 1; i <= par.PI; i++) {
+    pid_t wpid;
+
+    printf("GEN IMMIGRANT process => PPID=%d, PID=%d\n", getppid(), getpid());
+
+    for(int i = 1; i <= par.PI; i++){
 
         usleep(generate_random(par.IG));
 
         pid_t pid = fork();
         if(pid == 0) {
             process_immigrant(i);
-
-            exit(0);
+            printf("EXIT_IMM %d\n",i);
+            exit(EXIT_SUCCESS);
+        }else if(pid == -1){
+            fprintf(stderr,"Nastala chyba pri vytvareni procesu\n");
+            clean_all(data, shm_fd);
+            exit(EXIT_FAILURE);
         }
-
     }
 
+    while ((wpid = wait(NULL)) > 0);
+    printf("EXIT_IMM_GEN\n");
 }
 
 int generate_random(int max){
-    srand(time(0));
+
     return (rand() % (max + 1)) * 1000;  // prevod na mikrosekundy
 }

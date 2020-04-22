@@ -10,7 +10,7 @@
 #define FIT_IOS_2_PROJ2_H
 
 #define SUCC 0
-#define ERR 1
+#define ERR -1
 
 /**
  * parametry z prikazove radky
@@ -74,6 +74,14 @@ int set_sh_mem(int* shm_fd, struct Shared_data** data);
  * @param shm_fd
  */
 void clean_sh_mem(struct Shared_data* data, int shm_fd);
+
+/**
+ * @brief uvolneni vsech zdroju
+ *
+ * @param data
+ * @param shm_fd
+ */
+void clean_all(struct Shared_data* data, int shm_fd);
 
 /**
  * @brief inicializace sdilenych dat
